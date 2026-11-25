@@ -1,0 +1,2 @@
+import {h,mount,useState,useEffect} from './core/runtime.js';import Admin from './pages/admin.js';import Login from './pages/login.js';
+function App(){const [route,setRoute]=useState(location.hash);useEffect(()=>{const f=()=>setRoute(location.hash);window.addEventListener('hashchange',f);return()=>window.removeEventListener('hashchange',f);},[]);return route==='#/admin'?h(Admin,{}):h(Login,{});}mount(document.getElementById('app'),()=>h(App,{}));

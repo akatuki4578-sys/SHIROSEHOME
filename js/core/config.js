@@ -1,0 +1,2 @@
+export const SUPABASE_URL = 'https://qqarcadftahpckmrxwgp.supabase.co';
+export const SUPABASE_KEY = 'sb_publishable_YFJuvntnIafZMkFL992k6g_rJrmpCPM'; // Publishable key only. Never use service_role or secret keys.
