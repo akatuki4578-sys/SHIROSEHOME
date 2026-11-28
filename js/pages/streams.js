@@ -131,7 +131,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
     } }, [focusedId, clearFocus]);
     useEffect(() => {
         const found = streams.find(s => s.calendar_event_id === selected) ?? null;
-        setForm(found);
+        setForm(found ? { ...found, status: found.actual_end_at ? "completed" : found.status } : null);
         setPeopleDraft(splitPeople(found?.collaborators ?? null));
         setError("");
     }, [selected, streams]);
@@ -482,7 +482,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                     h("div", { className: "grid gap-4 sm:grid-cols-2" },
                         h("label", { className: "block text-sm" },
                             "\u72B6\u614B",
-                            h("select", { className: inputClass, value: form.status, onChange: e => setForm(v => v && ({ ...v, status: e.target.value })) },
+                            h("select", { className: inputClass, value: form.actual_end_at ? "completed" : form.status, onChange: e => setForm(v => v && ({ ...v, status: e.target.value })) },
                                 h("option", { value: "scheduled" }, "\u4E88\u5B9A"),
                                 h("option", { value: "live" }, "\u914D\u4FE1\u4E2D"),
                                 h("option", { value: "completed" }, "\u7D42\u4E86"))),
@@ -495,7 +495,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                             h("input", { className: inputClass, type: "datetime-local", value: localDateTime(form.actual_start_at), onChange: e => setForm(v => v && ({ ...v, actual_start_at: e.target.value })) })),
                         h("label", { className: "block text-sm" },
                             "\u5B9F\u969B\u306E\u7D42\u4E86\u65E5\u6642",
-                            h("input", { className: inputClass, type: "datetime-local", value: localDateTime(form.actual_end_at), onChange: e => setForm(v => v && ({ ...v, actual_end_at: e.target.value })) }))),
+                            h("input", { className: inputClass, type: "datetime-local", value: localDateTime(form.actual_end_at), onChange: e => setForm(v => v && ({ ...v, actual_end_at: e.target.value, status: e.target.value ? "completed" : (v.actual_start_at ? "live" : "scheduled") })) }))),
                     h("label", { className: "block text-sm" },
                         "\u30B2\u30FC\u30E0",
                         h("select", { className: inputClass, value: form.game_id ?? "", onChange: e => setForm(v => v && ({ ...v, game_id: e.target.value })) },
