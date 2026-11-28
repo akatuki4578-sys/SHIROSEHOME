@@ -5,7 +5,9 @@ const input = "mt-1 w-full rounded-lg border border-gray-300 bg-white p-2 text-s
 const btn = "rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-40";
 const primary = "rounded-lg bg-[#252525] px-4 py-2 text-sm text-white disabled:opacity-40";
 const defaultAreas = ["イラスト", "Live2D", "動画編集", "デザイン", "音楽", "その他"];
-const statuses = ["相談中", "見積待ち", "依頼中", "制作中", "確認中", "納品済み", "キャンセル"];
+const statuses = ["見積待ち", "依頼中", "納品済み"];
+const progressGroup = s => ["相談中", "見積待ち"].includes(s) ? "見積待ち" : ["制作中", "確認中"].includes(s) ? "依頼中" : s;
+const progressLabel = s => progressGroup(s) === "見積待ち" ? "見積中" : progressGroup(s);
 const payments = ["未払い", "一部支払い", "支払い済み"];
 // SNSのプロフィール画像は外部サービス経由で取得します。取得できない場合は頭文字を表示します。
 function socialAvatar(contacts) {
@@ -40,7 +42,7 @@ function CreatorAvatar({ creator, compact = false }) {
     return compact ? content : avatar ? h("a", { href: avatar.href, target: "_blank", rel: "noopener noreferrer", title: "SNS\u30D7\u30ED\u30D5\u30A3\u30FC\u30EB\u3092\u958B\u304F", className: "shrink-0" }, content) : content;
 }
 const blankCreator = () => ({ id: "", name: "", fields: [], contacts: [], rate_note: "", memo: "", favorite: false, drive_folder_url: "" });
-const blankRequest = (creator_id = "") => ({ id: "", creator_id, title: "", description: "", requested_on: null, due_on: null, estimated_amount: null, agreed_amount: null, paid_amount: null, progress: "相談中", payment_status: "未払い", delivery_url: "", memo: "", paid_on: null, request_page_url: null });
+const blankRequest = (creator_id = "") => ({ id: "", creator_id, title: "", description: "", requested_on: null, due_on: null, estimated_amount: null, agreed_amount: null, paid_amount: null, progress: "見積待ち", payment_status: "未払い", delivery_url: "", memo: "", paid_on: null, request_page_url: null });
 const amount = (v) => v === null ? "—" : `${v.toLocaleString("ja-JP")}円`;
 const numeric = (v) => v === "" ? null : Number(v);
 const yen = (n) => `${n.toLocaleString("ja-JP")}円`;
@@ -277,7 +279,7 @@ export default function CreatorMemo() {
     const onTotalChange = useCallback((total) => setRequestDraft(v => v ? { ...v, paid_amount: total } : v), []);
     const creatorMap = useMemo(() => new Map(creators.map(c => [c.id, c])), [creators]);
     const visibleCreators = creators.filter(c => (!favorites || c.favorite) && (area === "すべて" || c.fields.includes(area)) && [c.name, ...c.fields, c.memo].join(" ").toLowerCase().includes(search.toLowerCase()));
-    const visibleRequests = requests.filter(r => (status === "すべて" || r.progress === status) && [r.title, r.description, creatorMap.get(r.creator_id)?.name || ""].join(" ").toLowerCase().includes(search.toLowerCase()));
+    const visibleRequests = requests.filter(r => (status === "すべて" || progressGroup(r.progress) === status) && [r.title, r.description, creatorMap.get(r.creator_id)?.name || ""].join(" ").toLowerCase().includes(search.toLowerCase()));
     async function saveCreator() {
         if (!supabase || !creatorDraft || busy)
             return;
@@ -393,7 +395,7 @@ export default function CreatorMemo() {
                     h("input", { type: "checkbox", checked: favorites, onChange: e => setFavorites(e.target.checked) }),
                     "\u304A\u6C17\u306B\u5165\u308A\u306E\u307F")) : h("select", { className: input + " !mt-0 w-auto", value: status, onChange: e => setStatus(e.target.value) },
                 h("option", null, "\u3059\u3079\u3066"),
-                statuses.map(s => h("option", { key: s }, s)))),
+                statuses.map(s => h("option", { key: s, value: s }, progressLabel(s))))),
         loading && h("p", { className: "text-sm" }, "\u8AAD\u307F\u8FBC\u307F\u4E2D..."),
         !loading && tab === "creators" && h("div", { className: "grid gap-3 md:grid-cols-2 xl:grid-cols-3" },
             visibleCreators.map(c => h("button", { key: c.id, onClick: () => { setError(""); setCreatorDraft(structuredClone(c)); setCreatorEditing(false); }, className: "rounded-xl border bg-white p-5 text-left hover:bg-gray-50" },
@@ -419,12 +421,9 @@ export default function CreatorMemo() {
                         r.due_on || "未設定")),
                 h("div", { className: "text-right text-sm" },
                     h("p", null,
-                        r.progress,
+                        progressLabel(r.progress),
                         " / ",
-                        r.payment_status),
-                    h("p", { className: "mt-1 text-xs text-gray-500" },
-                        "\u78BA\u5B9A\u984D ",
-                        amount(r.agreed_amount))))),
+                        r.payment_status)))),
             visibleRequests.length === 0 && h("p", { className: "text-sm text-gray-500" }, "0\u4EF6")),
         error && h("p", { role: "alert", className: "text-sm text-red-700" }, error),
         creatorDraft && h("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4", onMouseDown: e => { if (e.target === e.currentTarget && !busy)
@@ -496,7 +495,7 @@ export default function CreatorMemo() {
                     requests.filter(r => r.creator_id === creatorDraft.id).map(r => h("button", { key: r.id, className: "block w-full rounded-md border border-gray-200 p-3 text-left text-sm hover:bg-gray-50", onClick: () => { setCreatorDraft(null); setTab("requests"); setRequestDraft({ ...r }); setRequestEditing(false); } },
                         r.title,
                         " / ",
-                        r.progress))),
+                        progressLabel(r.progress)))),
                 error && h("p", { role: "alert", className: "text-sm text-red-700" }, error))),
         requestDraft && h("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4", onMouseDown: e => { if (e.target === e.currentTarget && !busy)
                 setRequestDraft(null); } },
@@ -524,7 +523,7 @@ export default function CreatorMemo() {
                     h("div", { className: "grid gap-3 sm:grid-cols-2" },
                         h("label", { className: "text-sm" },
                             "\u9032\u6357",
-                            h("select", { className: input, value: requestDraft.progress, onChange: e => setRequestDraft(v => v && ({ ...v, progress: e.target.value })) }, statuses.map(s => h("option", { key: s }, s)))),
+                            h("select", { className: input, value: progressGroup(requestDraft.progress), onChange: e => setRequestDraft(v => v && ({ ...v, progress: e.target.value })) }, statuses.map(s => h("option", { key: s, value: s }, progressLabel(s))), !statuses.includes(progressGroup(requestDraft.progress)) && h("option", { value: requestDraft.progress, disabled: true }, progressLabel(requestDraft.progress) + "（旧データ）"))),
                         h("label", { className: "text-sm" },
                             "\u652F\u6255\u3044",
                             h("select", { className: input, value: requestDraft.payment_status, onChange: e => setRequestDraft(v => v && ({ ...v, payment_status: e.target.value })) }, payments.map(s => h("option", { key: s }, s))))),
@@ -549,7 +548,7 @@ export default function CreatorMemo() {
                             requestDraft.due_on || "—"),
                         h("div", null,
                             "\u9032\u6357\uFF1A",
-                            requestDraft.progress),
+                            progressLabel(requestDraft.progress)),
                         h("div", null,
                             "\u652F\u6255\u3044\uFF1A",
                             requestDraft.payment_status),
