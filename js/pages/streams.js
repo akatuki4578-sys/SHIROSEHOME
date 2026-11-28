@@ -87,6 +87,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
     const [newUrl, setNewUrl] = useState("");
     const [createError, setCreateError] = useState("");
     const [form, setForm] = useState(null);
+    const [eventDraft, setEventDraft] = useState(null);
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
     const [search, setSearch] = useState("");
@@ -153,6 +154,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         return () => { alive = false; };
     }, [selected, streams]);
     const event = events.find(e => e.id === selected);
+    useEffect(() => { setEventDraft(event ? {...event,start_time:event.start_time?.slice(0,5)||""} : null); }, [event]);
     const videoId = youtubeVideoId(form?.youtube_url || "");
     async function createStream() {
         if (!supabase || busy)
@@ -232,6 +234,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                 actual_start_at: result.actualStartAt ?? previous.actual_start_at,
                 actual_end_at: result.actualEndAt ?? previous.actual_end_at,
                 duration_minutes: result.durationMinutes ?? previous.duration_minutes,
+                status: result.actualEndAt ? "completed" : result.actualStartAt ? "live" : result.scheduledAt ? "scheduled" : previous.status,
             } : previous);
             setYoutubeMessage("取得しました。保存すると反映されます。");
         }
@@ -243,7 +246,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         }
     }
     async function save() {
-        if (!supabase || !form || !event || busy)
+        if (!supabase || !form || !event || !eventDraft || busy)
             return;
         if (form.youtube_url?.trim() && !videoId) {
             setError("YouTubeのURLを確認してください。");
@@ -259,12 +262,16 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         }
         setBusy(true);
         setError("");
+        if (!eventDraft.event_date || eventDraft.event_date < "2026-10-01") {setError("日付を確認してください。");setBusy(false);return;}
+        const er = await supabase.from("personal_calendar_events").update({event_date:eventDraft.event_date,title:eventDraft.title.trim(),start_time:eventDraft.start_time||null,category_id:eventDraft.category_id,notes:eventDraft.notes||null}).eq("id",event.id);
+        if(er.error){setError(er.error.message);setBusy(false);return;}
         const r = await supabase.from("personal_streams").update({ youtube_url: form.youtube_url?.trim() || null, status: form.status, actual_start_at: form.actual_start_at ? new Date(form.actual_start_at).toISOString() : null, actual_end_at: form.actual_end_at ? new Date(form.actual_end_at).toISOString() : null, duration_minutes: form.duration_minutes, game_id: form.game_id || null, game: null, collaborators: peopleDraft.map(v => v.trim()).filter(Boolean).join(", ") || null, private_notes: form.private_notes || null, youtube_title: form.youtube_title?.trim() || null, youtube_thumbnail: form.youtube_thumbnail || null, youtube_scheduled_at: form.youtube_scheduled_at || null }).eq("id", form.id);
         setBusy(false);
         if (r.error) {
-            setError(r.error.message);
+            setError("予定は保存されましたが、配信情報の保存に失敗しました: " + r.error.message);
             return;
         }
+        setMonthFilter(eventDraft.event_date.slice(0,7));
         await load();
         requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "smooth" }));
     }
@@ -468,6 +475,9 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                     " ",
                     event.start_time?.slice(0, 5)),
                 h("div", { className: "space-y-4" },
+                    eventDraft && h(Fragment,null,
+                        ...[["日付","event_date","date"],["予定名","title","text"],["開始時刻","start_time","time"],["予定メモ","notes","text"]].map(([label,key,type])=>h("label",{className:"block text-sm",key},label,h("input",{className:inputClass,type,value:eventDraft[key]??"",onChange:e=>setEventDraft(v=>({...v,[key]:e.target.value}))}))),
+                        h("label",{className:"block text-sm"},"種類",h("select",{className:inputClass,value:eventDraft.category_id,onChange:e=>setEventDraft(v=>({...v,category_id:e.target.value}))},types.filter(isStreamType).map(t=>h("option",{key:t.id,value:t.id},t.name))))),
                     h("label", { className: "block text-sm" },
                         "YouTube\u914D\u4FE1URL ",
                         h("span", { className: "font-bold text-red-600", "aria-label": "\u60C5\u5831\u53D6\u5F97\u5BFE\u8C61" }, "*"),
