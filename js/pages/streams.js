@@ -1,4 +1,4 @@
-import { fetchStreamMetadata } from "../shared/youtube-stream.js";
+import { fetchStreamMetadata, calendarMetadata } from "../shared/youtube-stream.js";
 import { h, Fragment, useCallback, useEffect, useMemo, useState, useRouter } from "../core/runtime.js";
 import { SUPABASE_URL, SUPABASE_KEY, isAuthorizedAdmin, supabase } from "../core/supabase.js";
 import { MIN_MONTH, pad, dateString, monthIndex, colors, colorNames, isFixedType, displayEventTitle, isStreamType, formatDuration, inputClass, buttonClass } from "../shared/activity-utils.js";
@@ -155,7 +155,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         return () => { alive = false; };
     }, [selected, streams]);
     const event = events.find(e => e.id === selected);
-    useEffect(() => { setEventDraft(event ? {...event,start_time:event.start_time?.slice(0,5)||""} : null); }, [event]);
+    useEffect(() => { setEventDraft(event ? {...event,title:streamMap.get(event.id)?.youtube_title || event.title,notes:event.notes ?? streamMap.get(event.id)?.private_notes ?? "",start_time:event.start_time?.slice(0,5)||""} : null); }, [event]);
     const videoId = youtubeVideoId(form?.youtube_url || "");
     async function createStream() {
         if (!supabase || busy)
@@ -174,16 +174,16 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         setCreateError("");
         try {
             const metadata = newUrl.trim() ? await fetchStreamMetadata(newUrl.trim()) : {};
+            const shared = calendarMetadata(metadata, {event_date:newDate,title:newTitle.trim(),start_time:newTime||null});
             const eventResult = await supabase.from("personal_calendar_events")
-                .insert({ event_date: newDate, title: newTitle.trim(), category_id: category.id,
-                start_time: newTime || null, notes: null })
+                .insert({ ...shared, category_id: category.id, notes: null })
                 .select("id").single();
             if (eventResult.error || !eventResult.data)
                 throw new Error(eventResult.error?.message || "登録できませんでした。");
             const eventId = eventResult.data.id;
             // 配信情報の作成に失敗した場合は、作成した予定も元に戻す。
             const streamResult = await supabase.from("personal_streams")
-                .insert({ calendar_event_id: eventId, youtube_url: newUrl.trim() || null, ...metadata });
+                .insert({ calendar_event_id: eventId, youtube_url: newUrl.trim() || null, ...metadata, youtube_title: shared.title });
             if (streamResult.error) {
                 const rollback = await supabase.from("personal_calendar_events").delete().eq("id", eventId);
                 throw new Error(streamResult.error.message + (rollback.error ? " / 予定の削除にも失敗しました: " + rollback.error.message : ""));
@@ -193,7 +193,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
             setNewTime("");
             setNewUrl("");
             setSearch("");
-            setMonthFilter(newDate.slice(0, 7));
+            setMonthFilter(shared.event_date.slice(0, 7));
             setStatusFilter("all");
             await load();
             setSelected(eventId);
@@ -219,6 +219,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         try {
             const metadata = await fetchStreamMetadata(form.youtube_url);
             setForm(previous => previous && previous.id === form.id && previous.youtube_url === form.youtube_url ? {...previous, ...metadata} : previous);
+            setEventDraft(previous => previous && previous.id === event.id ? {...previous,...calendarMetadata(metadata,previous)} : previous);
             setYoutubeMessage("取得しました。保存すると反映されます。");
         }
         catch (e) {
@@ -248,7 +249,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         if (!eventDraft.event_date || eventDraft.event_date < "2026-10-01") {setError("日付を確認してください。");setBusy(false);return;}
         const er = await supabase.from("personal_calendar_events").update({event_date:eventDraft.event_date,title:eventDraft.title.trim(),start_time:eventDraft.start_time||null,category_id:eventDraft.category_id,notes:eventDraft.notes||null}).eq("id",event.id);
         if(er.error){setError(er.error.message);setBusy(false);return;}
-        const r = await supabase.from("personal_streams").update({ youtube_url: form.youtube_url?.trim() || null, status: form.actual_end_at ? "completed" : form.status, actual_start_at: form.actual_start_at ? new Date(form.actual_start_at).toISOString() : null, actual_end_at: form.actual_end_at ? new Date(form.actual_end_at).toISOString() : null, duration_minutes: form.duration_minutes, game_id: form.game_id || null, game: null, collaborators: peopleDraft.map(v => v.trim()).filter(Boolean).join(", ") || null, private_notes: form.private_notes || null, youtube_title: form.youtube_title?.trim() || null, youtube_thumbnail: form.youtube_thumbnail || null, youtube_scheduled_at: form.youtube_scheduled_at || null }).eq("id", form.id);
+        const r = await supabase.from("personal_streams").update({ youtube_url: form.youtube_url?.trim() || null, status: form.actual_end_at ? "completed" : form.status, actual_start_at: form.actual_start_at ? new Date(form.actual_start_at).toISOString() : null, actual_end_at: form.actual_end_at ? new Date(form.actual_end_at).toISOString() : null, duration_minutes: form.duration_minutes, game_id: form.game_id || null, game: null, collaborators: peopleDraft.map(v => v.trim()).filter(Boolean).join(", ") || null, private_notes: eventDraft.notes || null, youtube_title: eventDraft.title.trim() || null, youtube_thumbnail: form.youtube_thumbnail || null, youtube_scheduled_at: form.youtube_scheduled_at || null }).eq("id", form.id);
         setBusy(false);
         if (r.error) {
             setError("予定は保存されましたが、配信情報の保存に失敗しました: " + r.error.message);
@@ -459,27 +460,22 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                     event.start_time?.slice(0, 5)),
                 h("div", { className: "space-y-4" },
                     eventDraft && h(Fragment,null,
-                        ...[["日付","event_date","date"],["予定名","title","text"],["開始時刻","start_time","time"],["予定メモ","notes","text"]].map(([label,key,type])=>h("label",{className:"block text-sm",key},label,h("input",{className:inputClass,type,value:eventDraft[key]??"",onChange:e=>setEventDraft(v=>({...v,[key]:e.target.value}))}))),
-                        h("label",{className:"block text-sm"},"種類",h("select",{className:inputClass,value:eventDraft.category_id,onChange:e=>setEventDraft(v=>({...v,category_id:e.target.value}))},types.filter(isStreamType).map(t=>h("option",{key:t.id,value:t.id},t.name))))),
+                        h("label",{className:"block text-sm"},"配信日",h("input",{className:inputClass,type:"date",value:eventDraft.event_date,onChange:e=>{const d=e.target.value;setEventDraft(v=>({...v,event_date:d}));setForm(v=>({...v,actual_start_at:v.actual_start_at&&d?d+"T"+localDateTime(v.actual_start_at).slice(11):v.actual_start_at}));}})),
+                        h("label",{className:"block text-sm"},"種類",h("select",{className:inputClass,value:eventDraft.category_id,onChange:e=>setEventDraft(v=>({...v,category_id:e.target.value}))},types.filter(isStreamType).map(t=>h("option",{key:t.id,value:t.id},t.name)))),
+                        h("label",{className:"block text-sm"},"YouTubeタイトル",h("input",{className:inputClass,value:eventDraft.title,onChange:e=>setEventDraft(v=>({...v,title:e.target.value}))}))),
+                    videoId && h("div", { className: "flex flex-wrap gap-2" },
+                        h("a", { className: buttonClass, href: `https://www.youtube.com/watch?v=${videoId}`, target: "_blank", rel: "noopener noreferrer" }, "YouTube\u3067\u958B\u304F"),
+                        h("a", { className: buttonClass, href: `https://studio.youtube.com/video/${videoId}/edit`, target: "_blank", rel: "noopener noreferrer" }, "YouTube Studio")),
                     h("label", { className: "block text-sm" },
-                        "YouTube\u914D\u4FE1URL ",
+                        "YouTube URL ",
                         h("span", { className: "font-bold text-red-600", "aria-label": "\u60C5\u5831\u53D6\u5F97\u5BFE\u8C61" }, "*"),
                         h("input", { className: inputClass, type: "url", placeholder: "https://www.youtube.com/watch?v=...", value: form.youtube_url ?? "", onChange: e => setForm(v => v && ({ ...v, youtube_url: e.target.value })) })),
                     h("button", { type: "button", className: buttonClass, disabled: !videoId || fetchingYoutube || busy, onClick: () => void fetchYoutube() }, fetchingYoutube ? "取得中" : "情報を取得・再取得"),
                     youtubeMessage && h("p", { className: "text-sm text-gray-600" }, youtubeMessage),
                     form.youtube_thumbnail && h("img", { src: form.youtube_thumbnail, alt: "YouTube\u30B5\u30E0\u30CD\u30A4\u30EB", className: "w-full max-w-sm rounded-lg", referrerPolicy: "no-referrer" }),
-                    h("label", { className: "block text-sm" },
-                        "YouTube\u30BF\u30A4\u30C8\u30EB ",
-                        h("span", { className: "font-bold text-red-600", "aria-label": "URL\u304B\u3089\u53D6\u5F97" }, "*"),
-                        h("input", { className: inputClass, value: form.youtube_title ?? "", onChange: e => setForm(v => v && ({ ...v, youtube_title: e.target.value })) })),
-                    h("label", { className: "block text-sm" },
-                        "YouTube\u914D\u4FE1\u4E88\u5B9A\u65E5\u6642 ",
-                        h("span", { className: "font-bold text-red-600", "aria-label": "URL\u304B\u3089\u53D6\u5F97" }, "*"),
-                        h("input", { className: inputClass, type: "datetime-local", value: localDateTime(form.youtube_scheduled_at), onChange: e => setForm(v => v && ({ ...v, youtube_scheduled_at: e.target.value ? new Date(e.target.value).toISOString() : null })) })),
-                    videoId && h("div", { className: "flex flex-wrap gap-2" },
-                        h("a", { className: buttonClass, href: `https://www.youtube.com/watch?v=${videoId}`, target: "_blank", rel: "noopener noreferrer" }, "YouTube\u3067\u958B\u304F"),
-                        h("a", { className: buttonClass, href: `https://studio.youtube.com/video/${videoId}/edit`, target: "_blank", rel: "noopener noreferrer" }, "YouTube Studio")),
-                    h("div", { className: "grid gap-4 sm:grid-cols-2" },
+                    h("label",{className:"block text-sm"},"開始日時",h("input",{className:inputClass,type:"datetime-local",value:eventDraft?.start_time ? eventDraft.event_date+"T"+eventDraft.start_time : "",onChange:e=>{const value=e.target.value;setEventDraft(v=>({...v,event_date:value?value.slice(0,10):v.event_date,start_time:value.slice(11)}));setForm(v=>({...v,actual_start_at:v.status!=="scheduled"?value:v.actual_start_at,youtube_scheduled_at:v.status==="scheduled"?(value?new Date(value).toISOString():null):v.youtube_scheduled_at}));}})),
+                    h("label",{className:"block text-sm"},"終了日時",h("input",{className:inputClass,type:"datetime-local",value:localDateTime(form.actual_end_at),onChange:e=>setForm(v=>({...v,actual_end_at:e.target.value,status:e.target.value?"completed":v.actual_start_at?"live":"scheduled"}))})),
+                    h("div", { className: "grid gap-4 grid-cols-2" },
                         h("label", { className: "block text-sm" },
                             "\u72B6\u614B",
                             h("select", { className: inputClass, value: form.actual_end_at ? "completed" : form.status, onChange: e => setForm(v => v && ({ ...v, status: e.target.value })) },
@@ -489,13 +485,6 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                         h("label", { className: "block text-sm" },
                             "\u914D\u4FE1\u6642\u9593\uFF08\u5206\uFF09",
                             h("input", { className: inputClass, type: "number", min: "0", value: form.duration_minutes ?? "", onChange: e => setForm(v => v && ({ ...v, duration_minutes: e.target.value === "" ? null : Number(e.target.value) })) }))),
-                    h("div", { className: "grid gap-4 sm:grid-cols-2" },
-                        h("label", { className: "block text-sm" },
-                            "\u5B9F\u969B\u306E\u958B\u59CB\u65E5\u6642",
-                            h("input", { className: inputClass, type: "datetime-local", value: localDateTime(form.actual_start_at), onChange: e => setForm(v => v && ({ ...v, actual_start_at: e.target.value })) })),
-                        h("label", { className: "block text-sm" },
-                            "\u5B9F\u969B\u306E\u7D42\u4E86\u65E5\u6642",
-                            h("input", { className: inputClass, type: "datetime-local", value: localDateTime(form.actual_end_at), onChange: e => setForm(v => v && ({ ...v, actual_end_at: e.target.value, status: e.target.value ? "completed" : (v.actual_start_at ? "live" : "scheduled") })) }))),
                     h("label", { className: "block text-sm" },
                         "\u30B2\u30FC\u30E0",
                         h("select", { className: inputClass, value: form.game_id ?? "", onChange: e => setForm(v => v && ({ ...v, game_id: e.target.value })) },
@@ -521,7 +510,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                             h("button", { type: "button", className: buttonClass, disabled: !!addingCatalog || busy || !newPersonName.trim(), onClick: () => void addCatalogInline("person") }, "\u30B3\u30E9\u30DC\u76F8\u624B\u3092\u767B\u9332"))),
                     h("label", { className: "block text-sm" },
                         "\u5099\u8003",
-                        h("textarea", { className: inputClass, rows: 4, value: form.private_notes ?? "", onChange: e => setForm(v => v && ({ ...v, private_notes: e.target.value })) }))),
+                        h("textarea", { className: inputClass, rows: 4, value: eventDraft?.notes ?? "", onChange: e => setEventDraft(v => v && ({ ...v, notes: e.target.value })) }))),
                 h("div", { className: "mt-5 flex flex-wrap items-center gap-3" },
                     h("button", { className: "rounded-lg bg-[#252525] px-5 py-2 text-sm text-white disabled:opacity-40", disabled: busy || fetchingYoutube, onClick: () => void save() }, busy ? "保存中" : "保存"),
                     h("button", { className: "ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm text-red-700 disabled:opacity-40", disabled: busy, onClick: () => void deleteStream() }, "\u914D\u4FE1\u3092\u524A\u9664"),

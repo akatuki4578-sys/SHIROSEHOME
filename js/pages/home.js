@@ -1,4 +1,4 @@
-import { fetchStreamMetadata } from "../shared/youtube-stream.js";
+import { fetchStreamMetadata, calendarMetadata } from "../shared/youtube-stream.js";
 import { h, Fragment, useCallback, useEffect, useMemo, useState, useRouter } from "../core/runtime.js";
 import { SUPABASE_URL, SUPABASE_KEY, isAuthorizedAdmin, supabase } from "../core/supabase.js";
 import { MIN_MONTH, pad, dateString, monthIndex, colors, colorNames, isFixedType, displayEventTitle, isStreamType, formatDuration, inputClass, buttonClass } from "../shared/activity-utils.js";
@@ -24,7 +24,7 @@ export default function Home({ data, openStream }) {
     const cells = Math.ceil((firstWeekday + days) / 7) * 7;
     const defaultType = types.find(t => t.system_key === "stream")?.id ?? types[0]?.id ?? "";
     const newDraft = (date) => ({ event_date: date, title: "", category_id: defaultType, start_time: "", notes: "", youtube_url: "" });
-    function edit(e) { setDraft({ id: e.id, event_date: e.event_date, title: e.title, category_id: e.category_id, start_time: e.start_time?.slice(0, 5) ?? "", notes: e.notes ?? "", youtube_url: streamMap.get(e.id)?.youtube_url ?? "" }); }
+    function edit(e) { setDraft({ id: e.id, event_date: e.event_date, title: streamMap.get(e.id)?.youtube_title || e.title, category_id: e.category_id, start_time: e.start_time?.slice(0, 5) ?? "", notes: e.notes ?? streamMap.get(e.id)?.private_notes ?? "", youtube_url: streamMap.get(e.id)?.youtube_url ?? "" }); }
     async function save() {
         if (!supabase || !draft || busy)
             return;
@@ -43,7 +43,7 @@ export default function Home({ data, openStream }) {
             try { metadata = await fetchStreamMetadata(url); }
             catch (e) { setError(e.message || "YouTube情報を取得できませんでした。"); setBusy(false); return; }
         }
-        const payload = { event_date: draft.event_date, title: draft.title.trim(), category_id: draft.category_id, start_time: draft.start_time || null, notes: draft.notes.trim() || null };
+        const payload = {...calendarMetadata(metadata,{event_date:draft.event_date,title:draft.title.trim(),start_time:draft.start_time||null}),category_id:draft.category_id,notes:draft.notes.trim()||null};
         const result = draft.id
             ? await supabase.from("personal_calendar_events").update(payload).eq("id", draft.id).select("id").single()
             : await supabase.from("personal_calendar_events").insert(payload).select("id").single();
@@ -56,7 +56,7 @@ export default function Home({ data, openStream }) {
         const stream = streamMap.get(id);
         const shouldHaveStream = isStreamType(typeMap.get(draft.category_id));
         if (shouldHaveStream) {
-            const r = stream ? await supabase.from("personal_streams").update({youtube_url: url || null, ...metadata}).eq("id", stream.id) : await supabase.from("personal_streams").insert({calendar_event_id: id, youtube_url: url || null, ...metadata});
+            const r = stream ? await supabase.from("personal_streams").update({youtube_url: url || null, ...metadata, youtube_title:payload.title, private_notes:payload.notes}).eq("id", stream.id) : await supabase.from("personal_streams").insert({calendar_event_id: id, youtube_url: url || null, ...metadata, youtube_title:payload.title, private_notes:payload.notes});
             if (r.error) { setError(`予定は保存されましたが、配信情報の保存に失敗しました: ${r.error.message}`); setDraft(v => ({...v,id})); setBusy(false); await load(); return; }
         }
         setBusy(false);
@@ -112,11 +112,11 @@ export default function Home({ data, openStream }) {
                         "\u65E5\u4ED8",
                         h("input", { className: inputClass, type: "date", min: "2026-10-01", value: draft.event_date, onChange: e => setDraft(v => v && ({ ...v, event_date: e.target.value })) })),
                     h("label", { className: "block text-sm" },
-                        "\u4E88\u5B9A\u540D\uFF08\u4EFB\u610F\uFF09",
-                        h("input", { className: inputClass, maxLength: 120, value: draft.title, onChange: e => setDraft(v => v && ({ ...v, title: e.target.value })) })),
-                    h("label", { className: "block text-sm" },
                         "\u7A2E\u985E",
                         h("select", { className: inputClass, value: draft.category_id, onChange: e => setDraft(v => v && ({ ...v, category_id: e.target.value })) }, types.map(t => h("option", { key: t.id, value: t.id }, t.name)))),
+                    h("label", { className: "block text-sm" },
+                        isStreamType(typeMap.get(draft.category_id)) ? "YouTubeタイトル" : "内容",
+                        h("input", { className: inputClass, value: draft.title, onChange: e => setDraft(v => v && ({ ...v, title: e.target.value })) })),
                     h("label", { className: "block text-sm" },
                         "\u958B\u59CB\u6642\u523B",
                         h("input", { className: inputClass, type: "time", value: draft.start_time, onChange: e => setDraft(v => v && ({ ...v, start_time: e.target.value })) })),
