@@ -1,3 +1,4 @@
+import { fetchStreamMetadata } from "../shared/youtube-stream.js";
 import { h, Fragment, useCallback, useEffect, useMemo, useState, useRouter } from "../core/runtime.js";
 import { SUPABASE_URL, SUPABASE_KEY, isAuthorizedAdmin, supabase } from "../core/supabase.js";
 import { MIN_MONTH, pad, dateString, monthIndex, colors, colorNames, isFixedType, displayEventTitle, isStreamType, formatDuration, inputClass, buttonClass } from "../shared/activity-utils.js";
@@ -172,6 +173,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         setBusy(true);
         setCreateError("");
         try {
+            const metadata = newUrl.trim() ? await fetchStreamMetadata(newUrl.trim()) : {};
             const eventResult = await supabase.from("personal_calendar_events")
                 .insert({ event_date: newDate, title: newTitle.trim(), category_id: category.id,
                 start_time: newTime || null, notes: null })
@@ -181,7 +183,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
             const eventId = eventResult.data.id;
             // 配信情報の作成に失敗した場合は、作成した予定も元に戻す。
             const streamResult = await supabase.from("personal_streams")
-                .insert({ calendar_event_id: eventId, youtube_url: newUrl.trim() || null });
+                .insert({ calendar_event_id: eventId, youtube_url: newUrl.trim() || null, ...metadata });
             if (streamResult.error) {
                 const rollback = await supabase.from("personal_calendar_events").delete().eq("id", eventId);
                 throw new Error(streamResult.error.message + (rollback.error ? " / 予定の削除にも失敗しました: " + rollback.error.message : ""));
@@ -215,27 +217,8 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         setError("");
         setYoutubeMessage("");
         try {
-            const { data: sessionData, error: authError } = await supabase.auth.getSession();
-            if (authError || !sessionData.session)
-                throw new Error("再ログインしてください。");
-            const response = await fetch(`${SUPABASE_URL}/functions/v1/youtube-video`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${sessionData.session.access_token}` },
-                body: JSON.stringify({ url: form.youtube_url }),
-            });
-            const result = await response.json();
-            if (!response.ok)
-                throw new Error(result.error || "取得できませんでした。");
-            setForm(previous => previous && previous.id === form.id ? {
-                ...previous,
-                youtube_title: result.title ?? previous.youtube_title,
-                youtube_thumbnail: result.thumbnail ?? previous.youtube_thumbnail,
-                youtube_scheduled_at: result.scheduledAt ?? previous.youtube_scheduled_at,
-                actual_start_at: result.actualStartAt ?? previous.actual_start_at,
-                actual_end_at: result.actualEndAt ?? previous.actual_end_at,
-                duration_minutes: result.durationMinutes ?? previous.duration_minutes,
-                status: result.actualEndAt ? "completed" : result.actualStartAt ? "live" : result.scheduledAt ? "scheduled" : previous.status,
-            } : previous);
+            const metadata = await fetchStreamMetadata(form.youtube_url);
+            setForm(previous => previous && previous.id === form.id && previous.youtube_url === form.youtube_url ? {...previous, ...metadata} : previous);
             setYoutubeMessage("取得しました。保存すると反映されます。");
         }
         catch (e) {
@@ -246,7 +229,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         }
     }
     async function save() {
-        if (!supabase || !form || !event || !eventDraft || busy)
+        if (!supabase || !form || !event || !eventDraft || busy || fetchingYoutube)
             return;
         if (form.youtube_url?.trim() && !videoId) {
             setError("YouTubeのURLを確認してください。");
@@ -265,7 +248,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
         if (!eventDraft.event_date || eventDraft.event_date < "2026-10-01") {setError("日付を確認してください。");setBusy(false);return;}
         const er = await supabase.from("personal_calendar_events").update({event_date:eventDraft.event_date,title:eventDraft.title.trim(),start_time:eventDraft.start_time||null,category_id:eventDraft.category_id,notes:eventDraft.notes||null}).eq("id",event.id);
         if(er.error){setError(er.error.message);setBusy(false);return;}
-        const r = await supabase.from("personal_streams").update({ youtube_url: form.youtube_url?.trim() || null, status: form.status, actual_start_at: form.actual_start_at ? new Date(form.actual_start_at).toISOString() : null, actual_end_at: form.actual_end_at ? new Date(form.actual_end_at).toISOString() : null, duration_minutes: form.duration_minutes, game_id: form.game_id || null, game: null, collaborators: peopleDraft.map(v => v.trim()).filter(Boolean).join(", ") || null, private_notes: form.private_notes || null, youtube_title: form.youtube_title?.trim() || null, youtube_thumbnail: form.youtube_thumbnail || null, youtube_scheduled_at: form.youtube_scheduled_at || null }).eq("id", form.id);
+        const r = await supabase.from("personal_streams").update({ youtube_url: form.youtube_url?.trim() || null, status: form.actual_end_at ? "completed" : form.status, actual_start_at: form.actual_start_at ? new Date(form.actual_start_at).toISOString() : null, actual_end_at: form.actual_end_at ? new Date(form.actual_end_at).toISOString() : null, duration_minutes: form.duration_minutes, game_id: form.game_id || null, game: null, collaborators: peopleDraft.map(v => v.trim()).filter(Boolean).join(", ") || null, private_notes: form.private_notes || null, youtube_title: form.youtube_title?.trim() || null, youtube_thumbnail: form.youtube_thumbnail || null, youtube_scheduled_at: form.youtube_scheduled_at || null }).eq("id", form.id);
         setBusy(false);
         if (r.error) {
             setError("予定は保存されましたが、配信情報の保存に失敗しました: " + r.error.message);
@@ -540,7 +523,7 @@ export default function StreamManager({ data, focusedId, clearFocus }) {
                         "\u5099\u8003",
                         h("textarea", { className: inputClass, rows: 4, value: form.private_notes ?? "", onChange: e => setForm(v => v && ({ ...v, private_notes: e.target.value })) }))),
                 h("div", { className: "mt-5 flex flex-wrap items-center gap-3" },
-                    h("button", { className: "rounded-lg bg-[#252525] px-5 py-2 text-sm text-white disabled:opacity-40", disabled: busy, onClick: () => void save() }, busy ? "保存中" : "保存"),
+                    h("button", { className: "rounded-lg bg-[#252525] px-5 py-2 text-sm text-white disabled:opacity-40", disabled: busy || fetchingYoutube, onClick: () => void save() }, busy ? "保存中" : "保存"),
                     h("button", { className: "ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm text-red-700 disabled:opacity-40", disabled: busy, onClick: () => void deleteStream() }, "\u914D\u4FE1\u3092\u524A\u9664"),
                     error && h("p", { role: "alert", className: "text-sm text-red-700" }, error)),
                 h("div", { className: "mt-8 border-t pt-6" },

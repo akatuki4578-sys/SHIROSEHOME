@@ -1,3 +1,4 @@
+import { fetchStreamMetadata } from "../shared/youtube-stream.js";
 import { h, Fragment, useCallback, useEffect, useMemo, useState, useRouter } from "../core/runtime.js";
 import { SUPABASE_URL, SUPABASE_KEY, isAuthorizedAdmin, supabase } from "../core/supabase.js";
 import { MIN_MONTH, pad, dateString, monthIndex, colors, colorNames, isFixedType, displayEventTitle, isStreamType, formatDuration, inputClass, buttonClass } from "../shared/activity-utils.js";
@@ -36,6 +37,12 @@ export default function Home({ data, openStream }) {
         if (draft.id && streamMap.has(draft.id) && !isStreamType(typeMap.get(draft.category_id))) { setError("配信登録済みの予定は配信以外に変更できません。"); return; }
         setBusy(true);
         setError("");
+        const previous = streamMap.get(draft.id);
+        let metadata = {};
+        if (isStreamType(typeMap.get(draft.category_id)) && url && url !== previous?.youtube_url) {
+            try { metadata = await fetchStreamMetadata(url); }
+            catch (e) { setError(e.message || "YouTube情報を取得できませんでした。"); setBusy(false); return; }
+        }
         const payload = { event_date: draft.event_date, title: draft.title.trim(), category_id: draft.category_id, start_time: draft.start_time || null, notes: draft.notes.trim() || null };
         const result = draft.id
             ? await supabase.from("personal_calendar_events").update(payload).eq("id", draft.id).select("id").single()
@@ -49,7 +56,7 @@ export default function Home({ data, openStream }) {
         const stream = streamMap.get(id);
         const shouldHaveStream = isStreamType(typeMap.get(draft.category_id));
         if (shouldHaveStream) {
-            const r = stream ? await supabase.from("personal_streams").update({youtube_url: url || null}).eq("id", stream.id) : await supabase.from("personal_streams").insert({calendar_event_id: id, youtube_url: url || null});
+            const r = stream ? await supabase.from("personal_streams").update({youtube_url: url || null, ...metadata}).eq("id", stream.id) : await supabase.from("personal_streams").insert({calendar_event_id: id, youtube_url: url || null, ...metadata});
             if (r.error) { setError(`予定は保存されましたが、配信情報の保存に失敗しました: ${r.error.message}`); setDraft(v => ({...v,id})); setBusy(false); await load(); return; }
         }
         setBusy(false);
